@@ -9,9 +9,9 @@
 # still unsure whether we're evaluating the brightness of the paper (or
 # are outside, in the background).
 
-const border_shadow = 0.075
+const border_shadow = 0.005
 const border = 0.05  # less than shadow as entire image shrinks from folds
-const plain_shade = 0.65
+const plain_shade = 0.5
 
 function to_bottom_corner(x)
     if 0 < x < 1
@@ -27,6 +27,8 @@ function undistorted(xy, light)
     x, y = viewport(xy)
     if 0 < x < 1 && 0 < y < 1
         return min(1, max(0, light))
+    elseif x < 0 || y < 0
+        return 1
     else
         x = to_bottom_corner(x)
         y = to_bottom_corner(y)
@@ -118,9 +120,16 @@ end
 
 # to render the image we evaluate it and random points.
 
+typealias Point (Float64, Float64)
+typealias Result (Point, Float64)
+
+function random_point()
+    return (rand(), rand())
+end
+
 function random_points()
     while true
-        produce((rand(), rand()))
+        produce(random_point())
     end
 end
 
@@ -133,22 +142,36 @@ function take(n, seq)
     return Task(inner)
 end
 
-function driver(n, image, output)
-    points = take(n, Task(random_points))
-    for result in map(point -> (point, image(point, plain_shade)), points)
-        output(result...)
+const block_size = 10000
+
+function block_eval(seed, image)
+    a = Array(Result, block_size)
+    srand(seed)
+    for i = 1:block_size
+        point = random_point()
+        a[i] = (point, image(point, plain_shade))
     end
+    return a
 end
 
-typealias Point (Float64, Float64)
+function driver(n, image, output)
+    blocks = div(n, block_size)
+    for block in map(seed -> block_eval(seed, image), 1:blocks)
+        for result in block
+            output(result...)
+        end
+    end
+end
 
 function pdriver(n, image, output)
-    points = take(n, Task(random_points))
-    for result::(Point, Float64) in 
-        pmap(point::Point -> (point, image(point, plain_shade)), points)
-        output(result...)
+    blocks = div(n, block_size)
+    for block in pmap(seed -> block_eval(seed, image), 1:blocks)
+        for result in block
+            output(result...)
+        end
     end
 end
+
 
 # testing
 
@@ -163,18 +186,27 @@ end
 # output to cairo pdf
 
 using Cairo
+const line_width = 0.5
+
+function set_line_cap(ctx::CairoContext, style)
+    ccall((:cairo_set_line_cap, "libcairo"), Void, (Ptr{Void},Int), ctx.ptr, style)
+end
 
 function cairo_pdf(file, size)
     s = CairoPDFSurface(file, size, size)
     c = CairoContext(s)
-    set_line_width(c, 1)
+#    set_line_width(c, line_width)
+    set_line_cap(c, 1)
     set_source_rgb(c, 0, 0, 0)
     function output(xy, g)
-        if g < rand()
+        if true || g < rand()
 #            set_source_rgb(c, g, g, g)
+            set_line_width(c, line_width * (1 - g))
             x, y = xy
             move_to(c, x * size, y * size)
-            rel_line_to(c, 1/sqrt(2), 1/sqrt(2))
+            close_path(c)
+#            rel_line_to(c, line_width/sqrt(2), line_width/sqrt(2))
+            stroke(c)
         end
     end
     for x = 0:1
